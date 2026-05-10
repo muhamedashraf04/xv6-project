@@ -54,21 +54,12 @@ void
 initlog(int dev, struct superblock *sb)
 {
   if (sizeof(struct logheader) >= BSIZE)
-    panic("initlog: too big");
+    panic("initlog: too big logheader");
 
   initlock(&log.lock, "log");
   log.start = sb->logstart;
-  log.size = sb->nlog;
   log.dev = dev;
-
-  // Phase 1: Read the header into memory
-  struct buf *b = bread(dev, log.start);
-  struct logheader *lh = (struct logheader *) (b->data);
-  log.lh.n = lh->n;
-  for (int i = 0; i < log.lh.n; i++) {
-    log.lh.block[i] = lh->block[i];
-  }
-  brelse(b);
+  recover_from_log();
 }
 
 // Copy committed blocks from log to their home location

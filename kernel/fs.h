@@ -57,10 +57,3 @@ struct dirent {
   ushort inum;
   char name[DIRSIZ];
 };
-
-
-struct logheader {
-  int n;
-  uint block[30];
-};
-
