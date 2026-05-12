@@ -106,7 +106,7 @@ allocpid()
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-static struct proc*
+ struct proc*
 allocproc(void)
 {
   struct proc *p;

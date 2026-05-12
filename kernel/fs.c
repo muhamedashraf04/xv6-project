@@ -21,6 +21,8 @@
 #include "buf.h"
 #include "file.h"
 
+extern void log_daemon(void);
+
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
@@ -45,6 +47,7 @@ fsinit(int dev) {
     panic("invalid file system");
   initlog(dev, &sb);
   ireclaim(dev);
+  //kernel_thread(log_daemon);
 }
 
 // Zero a block.
