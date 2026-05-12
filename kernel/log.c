@@ -195,17 +195,31 @@ static void write_log(void)
     struct buf *to = bread(log.dev, log.start+tail+1); // log block
     struct buf *from = bread(log.dev, log.lh.entries[tail].blockno); // cache block
 
-    // read the offset+len that log_write() stored 
-    int off = log.lh.entries[tail].offset;  // just copy the modified portion of the block
-    int len = log.lh.entries[tail].len;
-    
-    if (len>0)    // copy only the changed slice into the log block
-      memmove(to->data + off, from->data + off, len);
-    bwrite(to);  // write the log
+    // find first changed byte
+    int j = 0;
+    while (j < BSIZE && to->data[j] == from->data[j])
+      j++;
+
+    // find last changed byte
+    int end = BSIZE - 1;
+    while (end > j && to->data[end] == from->data[end])
+      end--;
+
+    if (j >= BSIZE) {
+      log.lh.entries[tail].offset = 0;
+      log.lh.entries[tail].len    = 0;
+    } else {
+      log.lh.entries[tail].offset = j;
+      log.lh.entries[tail].len    = end - j + 1;
+      memmove(to->data + j, from->data + j, end - j + 1);
+    }
+
+    bwrite(to);
     brelse(from);
     brelse(to);
   }
 }
+
 
 static void
 commit()
@@ -243,32 +257,12 @@ void log_write(struct buf *b)
       break;
   }
   log.lh.entries[i].blockno = b->blockno;
-  struct buf *curr = bread(log.dev, b->blockno); //read current on-disk version to compare against
-
-  int j =0; // j = start offset in block
-
-  while(j<BSIZE && curr->data[j] == b->data[j]) { // find first byte that differs
-    j++;
-  }
-  int end = BSIZE-1; // find last changed byte
-  while( end > j && curr->data[end] == b->data[end]) { 
-    end--;
-  }
-  brelse(curr);
-
- if (j >=BSIZE){  // no bytes differ, so no need to log
-  log.lh.entries[i].offset = 0;
-  log.lh.entries[i].len = 0;
- }
-
- else{
-  log.lh.entries[i].offset = j;
-  log.lh.entries[i].len = end-j+1;
- }
-
+  log.lh.entries[i].offset = 0; // default is to log whole block
+  log.lh.entries[i].len = BSIZE;
+  
  if (i == log.lh.n){
     bpin(b);  // add block to log if not already there
-  log.lh.n = i+1;
+  log.lh.n ++;
 }
 release(&log.lock);
 }
