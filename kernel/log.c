@@ -22,8 +22,7 @@ struct log {
   struct spinlock lock;
   int start;
   int outstanding; 
-  int committing; 
-  int needs_commit; 
+  int committing;  
   int dev;
   struct logheader lh;
 };
@@ -116,26 +115,6 @@ recover_from_log(void)
 }
 
 void
-log_daemon(void)
-{
-  while(1){
-    acquire(&log.lock);
-
-    if(log.needs_commit == 0){
-      release(&log.lock);
-      continue;
-    }
-
-    log.needs_commit = 0;
-    release(&log.lock);
-
-    printf("Daemon committing\n");
-
-    commit();
-  }
-}
-
-void
 begin_op(void)
 {
   acquire(&log.lock);
@@ -175,7 +154,7 @@ end_op(void)
     log.committing = 0;
     wakeup(&log);
     release(&log.lock);
-}
+  }
 }
 
 static void write_log(void)
