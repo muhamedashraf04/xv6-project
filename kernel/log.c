@@ -79,7 +79,11 @@ static void install_trans(int recovering)
     }
     struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
     struct buf *dbuf = bread(log.dev, log.lh.entries[tail].blockno); // read dst
-    memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
+
+    int off = log.lh.entries[tail].offset; 
+    int len = log.lh.entries[tail].len;
+    if (len>0)
+      memmove(dbuf->data + off, lbuf->data + off, len);  // apply to dst
     bwrite(dbuf);  // write dst to disk
     if(recovering == 0)
       bunpin(dbuf);
@@ -190,7 +194,13 @@ static void write_log(void)
   for (tail = 0; tail < log.lh.n; tail++) {
     struct buf *to = bread(log.dev, log.start+tail+1); // log block
     struct buf *from = bread(log.dev, log.lh.entries[tail].blockno); // cache block
-    memmove(to->data, from->data, BSIZE);
+
+    // read the offset+len that log_write() stored 
+    int off = log.lh.entries[tail].offset;  // just copy the modified portion of the block
+    int len = log.lh.entries[tail].len;
+    
+    if (len>0)    // copy only the changed slice into the log block
+      memmove(to->data + off, from->data + off, len);
     bwrite(to);  // write the log
     brelse(from);
     brelse(to);
@@ -233,12 +243,33 @@ void log_write(struct buf *b)
       break;
   }
   log.lh.entries[i].blockno = b->blockno;
-  log.lh.entries[i].offset = 0;
-  log.lh.entries[i].len = BSIZE;
-  if (i == log.lh.n) {  // Add new block to log?
-    bpin(b);
-    log.lh.n++;
+  struct buf *curr = bread(log.dev, b->blockno); //read current on-disk version to compare against
+
+  int j =0; // j = start offset in block
+
+  while(j<BSIZE && curr->data[j] == b->data[j]) { // find first byte that differs
+    j++;
   }
-  release(&log.lock);
+  int end = BSIZE-1; // find last changed byte
+  while( end > j && curr->data[end] == b->data[end]) { 
+    end--;
+  }
+  brelse(curr);
+
+ if (j >=BSIZE){  // no bytes differ, so no need to log
+  log.lh.entries[i].offset = 0;
+  log.lh.entries[i].len = 0;
+ }
+
+ else{
+  log.lh.entries[i].offset = j;
+  log.lh.entries[i].len = end-j+1;
+ }
+
+ if (i == log.lh.n){
+    bpin(b);  // add block to log if not already there
+  log.lh.n = i+1;
+}
+release(&log.lock);
 }
 
