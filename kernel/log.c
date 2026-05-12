@@ -32,9 +32,15 @@
 
 // Contents of the header block, used for both the on-disk header block
 // and to keep track in memory of logged block# before commit.
+struct log_entry {
+  int blockno;
+  int offset;
+  int len;
+};
+
 struct logheader {
   int n;
-  int block[LOGBLOCKS];
+  struct log_entry entries[LOGBLOCKS];
 };
 
 struct log {
@@ -63,17 +69,16 @@ initlog(int dev, struct superblock *sb)
 }
 
 // Copy committed blocks from log to their home location
-static void
-install_trans(int recovering)
+static void install_trans(int recovering)
 {
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
     if(recovering) {
-      printf("recovering tail %d dst %d\n", tail, log.lh.block[tail]);
+      printf("recovering tail %d dst %d\n", tail, log.lh.entries[tail].blockno);
     }
     struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
-    struct buf *dbuf = bread(log.dev, log.lh.block[tail]); // read dst
+    struct buf *dbuf = bread(log.dev, log.lh.entries[tail].blockno); // read dst
     memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
     bwrite(dbuf);  // write dst to disk
     if(recovering == 0)
@@ -84,15 +89,16 @@ install_trans(int recovering)
 }
 
 // Read the log header from disk into the in-memory log header
-static void
-read_head(void)
+static void read_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
+struct buf *buf = bread(log.dev, log.start);
   struct logheader *lh = (struct logheader *) (buf->data);
   int i;
   log.lh.n = lh->n;
   for (i = 0; i < log.lh.n; i++) {
-    log.lh.block[i] = lh->block[i];
+    log.lh.entries[i].blockno = lh->entries[i].blockno;
+    log.lh.entries[i].offset  = lh->entries[i].offset;
+    log.lh.entries[i].len     = lh->entries[i].len;
   }
   brelse(buf);
 }
@@ -100,15 +106,16 @@ read_head(void)
 // Write in-memory log header to disk.
 // This is the true point at which the
 // current transaction commits.
-static void
-write_head(void)
+static void write_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
-  struct logheader *hb = (struct logheader *) (buf->data);
+struct buf *buf = bread(log.dev, log.start);
+  struct logheader *lh = (struct logheader *) (buf->data);
   int i;
-  hb->n = log.lh.n;
+  lh->n = log.lh.n;
   for (i = 0; i < log.lh.n; i++) {
-    hb->block[i] = log.lh.block[i];
+    lh->entries[i].blockno = log.lh.entries[i].blockno;
+    lh->entries[i].offset  = log.lh.entries[i].offset;
+    lh->entries[i].len     = log.lh.entries[i].len;
   }
   bwrite(buf);
   brelse(buf);
@@ -176,14 +183,13 @@ end_op(void)
 }
 
 // Copy modified blocks from cache to log.
-static void
-write_log(void)
+static void write_log(void)
 {
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
     struct buf *to = bread(log.dev, log.start+tail+1); // log block
-    struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
+    struct buf *from = bread(log.dev, log.lh.entries[tail].blockno); // cache block
     memmove(to->data, from->data, BSIZE);
     bwrite(to);  // write the log
     brelse(from);
@@ -212,8 +218,7 @@ commit()
 //   modify bp->data[]
 //   log_write(bp)
 //   brelse(bp)
-void
-log_write(struct buf *b)
+void log_write(struct buf *b)
 {
   int i;
 
@@ -224,10 +229,12 @@ log_write(struct buf *b)
     panic("log_write outside of trans");
 
   for (i = 0; i < log.lh.n; i++) {
-    if (log.lh.block[i] == b->blockno)   // log absorption
+    if (log.lh.entries[i].blockno == b->blockno)   // log absorption
       break;
   }
-  log.lh.block[i] = b->blockno;
+  log.lh.entries[i].blockno = b->blockno;
+  log.lh.entries[i].offset = 0;
+  log.lh.entries[i].len = BSIZE;
   if (i == log.lh.n) {  // Add new block to log?
     bpin(b);
     log.lh.n++;
