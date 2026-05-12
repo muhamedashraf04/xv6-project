@@ -98,6 +98,7 @@ bread(uint dev, uint blockno)
   if(!b->valid) {
     virtio_disk_rw(b, 0);
     b->valid = 1;
+    memmove(b->old_data, b->data, BSIZE);
   }
   return b;
 }
