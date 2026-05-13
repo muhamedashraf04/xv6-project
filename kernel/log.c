@@ -6,7 +6,7 @@
 #include "sleeplock.h"
 #include "fs.h"
 #include "buf.h"
-
+#include "proc.h"
 // Simple logging that allows concurrent FS system calls.
 //
 // A log transaction contains the updates of multiple FS system
@@ -151,8 +151,7 @@ begin_op(void)
 
 // called at the end of each FS system call.
 // commits if this was the last outstanding operation.
-void
-end_op(void)
+void end_op(void)
 {
   int do_commit = 0;
 
@@ -160,26 +159,23 @@ end_op(void)
   log.outstanding -= 1;
   if(log.committing)
     panic("log.committing");
+  
   if(log.outstanding == 0){
     do_commit = 1;
-    log.committing = 1;
+    log.committing = 1; // Flag the daemon that it has work to do!
   } else {
-    // begin_op() may be waiting for log space,
-    // and decrementing log.outstanding has decreased
-    // the amount of reserved space.
     wakeup(&log);
   }
-  release(&log.lock);
 
   if(do_commit){
-    // call commit w/o holding locks, since not allowed
-    // to sleep with locks.
-    commit();
-    acquire(&log.lock);
-    log.committing = 0;
-    wakeup(&log);
-    release(&log.lock);
+    // WAKE UP THE DAEMON!
+    wakeup(&log.committing);
+    
+    // Notice we DO NOT call commit() here anymore! 
+    // The user program returns instantly. The daemon handles the disk.
   }
+  
+  release(&log.lock);
 }
 
 // Copy modified blocks from cache to log.
@@ -208,7 +204,36 @@ commit()
     write_head();    // Erase the transaction from the log
   }
 }
+// The Background Daemon!
+void commit_daemon(void) 
+{
+  // 1. We just woke up! The scheduler is holding our process lock. 
+  // We MUST release it immediately so the OS doesn't deadlock.
+  release(&myproc()->lock);
 
+  // 2. The infinite background loop
+  for(;;) {
+    acquire(&log.lock);
+    
+    // Sleep in the background until end_op() yells "WAKE UP!"
+    while(log.committing == 0) {
+      sleep(&log.committing, &log.lock);
+    }
+    
+    // We cannot do disk I/O while holding a spinlock, so drop it
+    release(&log.lock);
+
+    // Do the heavy lifting (writing to the disk)
+    printf("Daemon committing\n");
+    commit();
+
+    // Re-acquire lock to update state and wake up any waiting user programs
+    acquire(&log.lock);
+    log.committing = 0;
+    wakeup(&log); // Wake up programs waiting in begin_op()
+    release(&log.lock);
+  }
+}
 // Caller has modified b->data and is done with the buffer.
 // Record the block number and pin in the cache by increasing refcnt.
 // commit()/write_log() will do the disk write.
@@ -241,4 +266,3 @@ void log_write(struct buf *b)
   }
   release(&log.lock);
 }
-
