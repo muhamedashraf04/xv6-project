@@ -685,3 +685,20 @@ procdump(void)
     printf("\n");
   }
 }
+
+// Put this at the bottom of kernel/proc.c
+
+extern void commit_daemon(void);
+
+void init_commit_daemon(void) {
+  struct proc *p = allocproc(); // allocproc returns with p->lock held!
+  
+  // Hijack the process! Instead of standard user space setup, 
+  // we aim its instruction pointer directly at our daemon loop.
+  p->context.ra = (uint64)commit_daemon;
+  
+  // Mark it runnable so the scheduler picks it up immediately
+  p->state = RUNNABLE;
+  
+  release(&p->lock);
+}

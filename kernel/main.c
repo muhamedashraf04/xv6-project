@@ -29,7 +29,9 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
+    init_commit_daemon(); // WAKE UP THE DAEMON! <-- ADD THIS LINE
     __sync_synchronize();
+    started = 1;
     started = 1;
   } else {
     while(started == 0)
