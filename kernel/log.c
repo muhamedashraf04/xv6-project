@@ -50,11 +50,12 @@ struct log {
   int committing;  
   int dev;
   struct logheader lh;
+  int force_clean;
 };
 struct log log;
 
+
 static void recover_from_log(void);
-static void commit();
 
 void
 initlog(int dev, struct superblock *sb)
@@ -65,6 +66,7 @@ initlog(int dev, struct superblock *sb)
   initlock(&log.lock, "log");
   log.start = sb->logstart;
   log.dev = dev;
+  log.force_clean = 0;
   recover_from_log();
 }
 
@@ -139,16 +141,26 @@ recover_from_log(void)
   write_head(); // clear the log
 }
 
-void
-begin_op(void)
+void begin_op(void)
 {
   acquire(&log.lock);
   while(1){
     if(log.committing){
       sleep(&log, &log.lock);
-    } else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGBLOCKS){
-      sleep(&log, &log.lock);
-    } else {
+    } 
+    else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGBLOCKS){
+      log.force_clean = 1; // Flip the panic alarm...
+      
+      // But ONLY wake the daemon ourselves if no one else is currently writing!
+      // Otherwise, the guy currently writing will wake the daemon when he finishes.
+      if (log.outstanding == 0) {
+        log.committing = 1;
+        wakeup(&log.committing); 
+      }
+      
+      sleep(&log, &log.lock); // Go to sleep and wait for space
+    } 
+    else {
       log.outstanding += 1;
       release(&log.lock);
       break;
@@ -219,45 +231,42 @@ static void write_log(void)
     brelse(to);
   }
 }
-
-static void
-commit()
-{
-  if (log.lh.n > 0) {
-    write_log();     // Write modified blocks from cache to log
-    write_head();    // Write header to disk -- the real commit
-    install_trans(0); // Now install writes to home locations
-    log.lh.n = 0;
-    write_head();    // Erase the transaction from the log
-  }
-}
 // The Background Daemon!
 void commit_daemon(void) 
 {
-  // 1. We just woke up! The scheduler is holding our process lock. 
-  // We MUST release it immediately so the OS doesn't deadlock.
-  release(&myproc()->lock);
+  release(&myproc()->lock); // Drop the scheduler lock we inherited
 
-  // 2. The infinite background loop
   for(;;) {
     acquire(&log.lock);
     
-    // Sleep in the background until end_op() yells "WAKE UP!"
     while(log.committing == 0) {
       sleep(&log.committing, &log.lock);
     }
     
-    // We cannot do disk I/O while holding a spinlock, so drop it
+    // WE JUST WOKE UP! DROP THE SPINLOCK IMMEDIATELY!
+    // We cannot hold a spinlock while waiting for the physical hard drive.
     release(&log.lock);
+    
+    // 1. FAST SAVE: Write modified blocks to the journal.
+    if (log.lh.n > 0) {
+      write_log();     
+      write_head();    
+    }
 
-    // Do the heavy lifting (writing to the disk)
-    printf("Daemon committing\n");
-    commit();
+    // 2. CHECKPOINTING (Task 5)
+    if(log.lh.n >= LOGBLOCKS - (MAXOPBLOCKS * 2) || log.force_clean == 1) {
+      install_trans(0);   // Move data from journal to actual files
+      
+      // We don't need the lock here because committing=1 blocks all other programs
+      log.lh.n = 0;       // Space is recovered.
+      log.force_clean = 0; // Turn off the panic alarm
+      write_head();       // Erase the journal on disk
+    }
 
-    // Re-acquire lock to update state and wake up any waiting user programs
+    // 3. CLEANUP: Grab the lock again just to wake up waiting programs
     acquire(&log.lock);
     log.committing = 0;
-    wakeup(&log); // Wake up programs waiting in begin_op()
+    wakeup(&log); 
     release(&log.lock);
   }
 }

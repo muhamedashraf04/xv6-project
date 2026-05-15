@@ -920,6 +920,7 @@ reparent(char *s)
         printf("%s: wait wrong pid\n", s);
         exit(1);
       }
+      pause(10);
     } else {
       int pid2 = fork();
       if(pid2 < 0){
@@ -1047,6 +1048,7 @@ reparent2(char *s)
       exit(0);
     }
     wait(0);
+    pause(10);
   }
 
   exit(0);
